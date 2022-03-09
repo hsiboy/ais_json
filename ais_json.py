@@ -14,9 +14,11 @@ IP = '127.0.0.1'
 PORT = 5000
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind((IP, PORT))
+
 
 while True:
+
+  sock.bind((IP, PORT))
 
   for msg in ais.stream.decode(sock.makefile('r'),keep_nmea=True):
     rxtime =  datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S") #YYYYMMDDHHMMSS
@@ -84,11 +86,17 @@ while True:
       r = requests.post(URL, files={'jsonais': (None, post)})
       #dump non common packets for debugging
       if parsed['id'] not in (1,2,3,4):
-        print colored('-- Uncommon packet recieved\n', 'red')
-        print colored('id:', 'green'), parsed['id']
-        print colored('NMEA:', 'green'), parsed['nmea']
-        print colored('Parsed:', 'green'), parsed
-        print colored('Post:', 'green'), post
-        print colored('Result:', 'green'), json.loads(r.text)['description']
+      #print(colored('hello', 'red'), colored('world', 'green'))
+
+
+
+       print(colored('-- Uncommon packet recieved\n', 'red'))
+       print(colored('id:', 'green'), parsed['id'])
+       print(colored('NMEA:', 'green'), parsed['nmea'])
+       print(colored('Parsed:', 'green'), parsed)
+       print(colored('Post:', 'green'), post)
+       print(colored('Result:', 'green'), json.loads(r.text)['description'])
     except requests.exceptions.RequestException as e:
-      print e
+      print (e)
+  
+  sock.close()
