@@ -4,11 +4,16 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import json
 import datetime
+import time
+import random
 import requests
 
+POSITION_TYPES = {1, 2, 3, 18}
+POSITION_DEDUP_INTERVAL = 120  # seconds
 
-def parsed_to_jsonais(parsed, name, url, rxtime=None):
-    """Convert a parsed AIS message dict to a jsonais output dict."""
+
+def parsed_to_ais_msg(parsed, rxtime=None):
+    """Convert a parsed AIS message dict to an ais_msg dict."""
     if rxtime is None:
         rxtime = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
 
@@ -55,13 +60,21 @@ def parsed_to_jsonais(parsed, name, url, rxtime=None):
     if 'persons' in parsed:
       ais_msg['persons_on_board'] = parsed['persons']
 
+    return ais_msg
+
+
+def build_jsonais_batch(msgs, name, url, rxtime=None):
+    """Wrap a list of ais_msg dicts into a jsonais output structure."""
+    if rxtime is None:
+        rxtime = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+
     path = {
             "name": name,
             "url": url }
 
     groups = {
             "path": [path],
-            "msgs": [ais_msg] }
+            "msgs": msgs }
 
     output = {
             "encodetime": rxtime,
@@ -70,6 +83,39 @@ def parsed_to_jsonais(parsed, name, url, rxtime=None):
             }
 
     return output
+
+
+def parsed_to_jsonais(parsed, name, url, rxtime=None):
+    """Convert a parsed AIS message dict to a jsonais output dict."""
+    ais_msg = parsed_to_ais_msg(parsed, rxtime=rxtime)
+    return build_jsonais_batch([ais_msg], name, url, rxtime=rxtime)
+
+
+class AISCache:
+    def __init__(self, dedup_interval=POSITION_DEDUP_INTERVAL):
+        self.cache = {}              # (mmsi, msgtype) -> ais_msg
+        self.last_sent_pos = {}      # mmsi -> (lon, lat, monotonic_time)
+        self.dedup_interval = dedup_interval
+
+    def add(self, ais_msg):
+        key = (ais_msg['mmsi'], ais_msg['msgtype'])
+        self.cache[key] = ais_msg
+
+    def flush(self, now=None):
+        if now is None:
+            now = time.monotonic()
+        msgs = []
+        for (mmsi, msgtype), msg in self.cache.items():
+            if msgtype in POSITION_TYPES:
+                pos = (msg.get('lon'), msg.get('lat'))
+                last = self.last_sent_pos.get(mmsi)
+                if last and last[0] == pos[0] and last[1] == pos[1] \
+                        and (now - last[2]) < self.dedup_interval:
+                    continue
+                self.last_sent_pos[mmsi] = (pos[0], pos[1], now)
+            msgs.append(msg)
+        self.cache.clear()
+        return msgs
 
 
 def post_jsonais(url, output):
@@ -91,20 +137,22 @@ if __name__ == '__main__':
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((IP, PORT))
 
+    cache = AISCache()
+    next_send = time.monotonic() + 28 + random.uniform(0, 4)
+
     while True:
       for msg in ais.stream.decode(sock.makefile('r'), keep_nmea=True):
         parsed = json.loads(json.dumps(msg))
-        output = parsed_to_jsonais(parsed, NAME, URL)
+        ais_msg = parsed_to_ais_msg(parsed)
+        cache.add(ais_msg)
 
-        try:
-          r = post_jsonais(URL, output)
-          #dump non common packets for debugging
-          if parsed['id'] not in (1, 2, 3, 4):
-            print(colored('-- Uncommon packet recieved\n', 'red'))
-            print(colored('id:', 'green'), parsed['id'])
-            print(colored('NMEA:', 'green'), parsed['nmea'])
-            print(colored('Parsed:', 'green'), parsed)
-            print(colored('Post:', 'green'), json.dumps(output))
-            print(colored('Result:', 'green'), json.loads(r.text)['description'])
-        except requests.exceptions.RequestException as e:
-          print(e)
+        now = time.monotonic()
+        if now >= next_send:
+          msgs = cache.flush(now)
+          if msgs:
+            output = build_jsonais_batch(msgs, NAME, URL)
+            try:
+              post_jsonais(URL, output)
+            except requests.exceptions.RequestException as e:
+              print(e)
+          next_send = now + 28 + random.uniform(0, 4)
