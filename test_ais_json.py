@@ -1,0 +1,321 @@
+from unittest.mock import patch, MagicMock
+from ais_json import parsed_to_jsonais, parsed_to_ais_msg, build_jsonais_batch, post_jsonais, AISCache, BatchSender, udp_lines
+import socket
+
+
+def test_parsed_to_jsonais_position_report():
+    parsed = {
+        'id': 1,
+        'mmsi': 211234567,
+        'x': 24.9384,
+        'y': 60.1699,
+        'sog': 12.3,
+        'cog': 45.6,
+        'true_heading': 47,
+        'nav_status': 0,
+    }
+
+    output = parsed_to_jsonais(parsed, 'TestStation', rxtime='20260223120000')
+
+    assert output['protocol'] == 'jsonais'
+    assert output['encodetime'] == '20260223120000'
+    assert len(output['groups']) == 1
+
+    group = output['groups'][0]
+    assert group['path'] == [{'name': 'TestStation'}]
+
+    msg = group['msgs'][0]
+    assert msg['msgtype'] == 1
+    assert msg['mmsi'] == 211234567
+    assert msg['lon'] == 24.9384
+    assert msg['lat'] == 60.1699
+    assert msg['speed'] == 12.3
+    assert msg['course'] == 45.6
+    assert msg['heading'] == 47
+    assert msg['status'] == 0
+    assert msg['rxtime'] == '20260223120000'
+
+
+def test_parsed_to_jsonais_minimal():
+    parsed = {'id': 5, 'mmsi': 123456789}
+
+    output = parsed_to_jsonais(parsed, 'Sta', rxtime='20260101000000')
+
+    msg = output['groups'][0]['msgs'][0]
+    assert msg['msgtype'] == 5
+    assert msg['mmsi'] == 123456789
+    assert 'lon' not in msg
+    assert 'lat' not in msg
+
+
+def test_parsed_to_jsonais_static_fields():
+    parsed = {
+        'id': 5,
+        'mmsi': 123456789,
+        'callsign': 'ABCD',
+        'name': 'TESTSHIP',
+        'type_and_cargo': 70,
+        'dim_a': 100,
+        'dim_c': 10,
+        'draught': 5.5,
+        'destination': 'HELSINKI',
+    }
+
+    output = parsed_to_jsonais(parsed, 'Sta', rxtime='20260101000000')
+    msg = output['groups'][0]['msgs'][0]
+
+    assert msg['callsign'] == 'ABCD'
+    assert msg['shipname'] == 'TESTSHIP'
+    assert msg['shiptype'] == 70
+    assert msg['ref_front'] == 100
+    assert msg['ref_left'] == 10
+    assert msg['draught'] == 5.5
+    assert msg['destination'] == 'HELSINKI'
+
+
+@patch('ais_json.requests.post')
+def test_post_jsonais(mock_post):
+    mock_post.return_value = MagicMock(status_code=200)
+
+    output = {'protocol': 'jsonais', 'groups': []}
+    r = post_jsonais('http://example.com/post', output)
+
+    mock_post.assert_called_once()
+    call_args = mock_post.call_args
+    assert call_args[0][0] == 'http://example.com/post'
+    assert 'jsonais' in call_args[1]['files']
+    assert r.status_code == 200
+
+
+def test_parsed_to_ais_msg():
+    parsed = {
+        'id': 1,
+        'mmsi': 211234567,
+        'x': 24.9384,
+        'y': 60.1699,
+        'sog': 12.3,
+        'cog': 45.6,
+        'true_heading': 47,
+        'nav_status': 0,
+    }
+
+    msg = parsed_to_ais_msg(parsed, rxtime='20260223120000')
+
+    assert msg['msgtype'] == 1
+    assert msg['mmsi'] == 211234567
+    assert msg['lon'] == 24.9384
+    assert msg['lat'] == 60.1699
+    assert msg['speed'] == 12.3
+    assert msg['course'] == 45.6
+    assert msg['heading'] == 47
+    assert msg['status'] == 0
+    assert msg['rxtime'] == '20260223120000'
+
+
+def test_build_jsonais_batch():
+    msgs = [
+        {'msgtype': 1, 'mmsi': 111, 'rxtime': '20260101000000'},
+        {'msgtype': 5, 'mmsi': 222, 'rxtime': '20260101000000'},
+    ]
+
+    output = build_jsonais_batch(msgs, 'TestStation', rxtime='20260101000000')
+
+    assert output['protocol'] == 'jsonais'
+    assert output['encodetime'] == '20260101000000'
+    group = output['groups'][0]
+    assert group['path'] == [{'name': 'TestStation'}]
+    assert group['msgs'] == msgs
+    assert len(group['msgs']) == 2
+
+
+def test_cache_keeps_latest_per_mmsi_and_type():
+    cache = AISCache()
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0, 'speed': 5.0})
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.1, 'lat': 2.1, 'speed': 6.0})
+
+    msgs = cache.flush(now=1000.0)
+
+    assert len(msgs) == 1
+    assert msgs[0]['lon'] == 1.1
+    assert msgs[0]['speed'] == 6.0
+
+
+def test_cache_position_dedup():
+    cache = AISCache()
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0})
+    msgs1 = cache.flush(now=1000.0)
+    assert len(msgs1) == 1
+
+    # Same position within 120s - should be deduplicated
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0})
+    msgs2 = cache.flush(now=1050.0)
+    assert len(msgs2) == 0
+
+
+def test_cache_position_dedup_changed_position():
+    cache = AISCache()
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0})
+    cache.flush(now=1000.0)
+
+    # Changed position within 120s - should pass through
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.5, 'lat': 2.5})
+    msgs = cache.flush(now=1050.0)
+    assert len(msgs) == 1
+    assert msgs[0]['lon'] == 1.5
+
+
+def test_cache_position_dedup_expired():
+    cache = AISCache()
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0})
+    cache.flush(now=1000.0)
+
+    # Same position but after 120s - should pass through
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0})
+    msgs = cache.flush(now=1200.0)
+    assert len(msgs) == 1
+
+
+def test_cache_ignores_ignored_types():
+    cache = AISCache()
+
+    for msgtype in [7, 10, 11, 12, 13, 15, 16, 20, 22, 23]:
+        cache.add({'mmsi': 111, 'msgtype': msgtype})
+
+    msgs = cache.flush(now=1000.0)
+    assert len(msgs) == 0
+
+
+def test_cache_accepts_non_ignored_types():
+    cache = AISCache()
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0})
+    cache.add({'mmsi': 222, 'msgtype': 5})
+
+    msgs = cache.flush(now=1000.0)
+    assert len(msgs) == 2
+
+
+def test_positions_rounded_to_6_decimals():
+    parsed = {
+        'id': 1,
+        'mmsi': 211234567,
+        'x': 24.93840001,
+        'y': 60.16990009,
+    }
+
+    msg = parsed_to_ais_msg(parsed, rxtime='20260101000000')
+    assert msg['lon'] == 24.93840
+    assert msg['lat'] == 60.16990
+
+
+def test_cache_position_dedup_with_rounding():
+    """Positions differing only beyond 6 decimals should be deduplicated."""
+    cache = AISCache()
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.000000, 'lat': 2.000000})
+    msgs1 = cache.flush(now=1000.0)
+    assert len(msgs1) == 1
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0000001, 'lat': 2.0000001})
+    msgs2 = cache.flush(now=1050.0)
+    assert len(msgs2) == 0
+
+
+def test_cache_keeps_both_type24_parts():
+    """Type 24 part A and part B must not overwrite each other."""
+    cache = AISCache()
+    cache.add({'mmsi': 111, 'msgtype': 24, 'partno': 0, 'shipname': 'TESTSHIP'})
+    cache.add({'mmsi': 111, 'msgtype': 24, 'partno': 1, 'callsign': 'ABCD'})
+    cache.add({'mmsi': 111, 'msgtype': 24, 'partno': 0, 'shipname': 'NEWNAME'})
+
+    msgs = cache.flush(now=1000.0)
+
+    assert len(msgs) == 2
+    by_part = {m['partno']: m for m in msgs}
+    assert by_part[0]['shipname'] == 'NEWNAME'
+    assert by_part[1]['callsign'] == 'ABCD'
+
+
+def test_cache_position_dedup_changed_status():
+    """A changed nav status passes through even if the position is the same."""
+    cache = AISCache()
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0, 'status': 0})
+    cache.flush(now=1000.0)
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0, 'status': 5})
+    msgs = cache.flush(now=1050.0)
+    assert len(msgs) == 1
+    assert msgs[0]['status'] == 5
+
+
+def test_cache_position_dedup_ignores_heading():
+    """Heading, course and speed drift on moored vessels; do not resend for them."""
+    cache = AISCache()
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0, 'status': 5, 'heading': 10})
+    cache.flush(now=1000.0)
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0, 'status': 5, 'heading': 12,
+               'course': 33.0, 'speed': 0.1})
+    msgs = cache.flush(now=1050.0)
+    assert len(msgs) == 0
+
+
+@patch('ais_json.post_jsonais')
+def test_batch_sender_waits_for_interval(mock_post):
+    cache = AISCache()
+    sender = BatchSender(cache, 'Sta', 'http://example.com/post', now=1000.0)
+    cache.add({'mmsi': 111, 'msgtype': 5})
+
+    sender.tick(now=1010.0)
+    mock_post.assert_not_called()
+
+    sender.tick(now=1033.0)
+    mock_post.assert_called_once()
+    output = mock_post.call_args[0][1]
+    assert output['groups'][0]['msgs'] == [{'mmsi': 111, 'msgtype': 5}]
+
+    # Next send is scheduled 28-32 seconds later
+    cache.add({'mmsi': 222, 'msgtype': 5})
+    sender.tick(now=1060.0)
+    assert mock_post.call_count == 1
+    sender.tick(now=1066.0)
+    assert mock_post.call_count == 2
+
+
+@patch('ais_json.post_jsonais')
+def test_batch_sender_skips_empty_batch(mock_post):
+    sender = BatchSender(AISCache(), 'Sta', 'http://example.com/post', now=1000.0)
+    sender.tick(now=1100.0)
+    mock_post.assert_not_called()
+
+
+def test_udp_lines_ticks_when_idle():
+    """tick() runs on timeout without traffic, and after each packet."""
+    rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        rx.bind(('127.0.0.1', 0))
+        ticks = []
+
+        def tick_after_timeouts():
+            # Send a packet only after the receiver has idled a couple of times
+            if len(ticks) == 2:
+                tx.sendto(b'!AIVDM,a\r\n!AIVDM,b\r\n', rx.getsockname())
+
+        lines = udp_lines(rx, lambda: (ticks.append(1), tick_after_timeouts()), timeout=0.05)
+        assert next(lines) == '!AIVDM,a\r\n'
+        assert len(ticks) == 2
+        assert next(lines) == '!AIVDM,b\r\n'
+
+        # Generator resumes after the packet: tick, then idle timeouts
+        tx.sendto(b'!AIVDM,c\n', rx.getsockname())
+        assert next(lines) == '!AIVDM,c\n'
+        assert len(ticks) == 3
+    finally:
+        rx.close()
+        tx.close()
