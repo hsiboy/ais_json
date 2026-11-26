@@ -63,14 +63,13 @@ def parsed_to_ais_msg(parsed, rxtime=None):
     return ais_msg
 
 
-def build_jsonais_batch(msgs, name, url, rxtime=None):
+def build_jsonais_batch(msgs, name, rxtime=None):
     """Wrap a list of ais_msg dicts into a jsonais output structure."""
     if rxtime is None:
         rxtime = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
 
     path = {
-            "name": name,
-            "url": url }
+            "name": name }
 
     groups = {
             "path": [path],
@@ -85,10 +84,10 @@ def build_jsonais_batch(msgs, name, url, rxtime=None):
     return output
 
 
-def parsed_to_jsonais(parsed, name, url, rxtime=None):
+def parsed_to_jsonais(parsed, name, rxtime=None):
     """Convert a parsed AIS message dict to a jsonais output dict."""
     ais_msg = parsed_to_ais_msg(parsed, rxtime=rxtime)
-    return build_jsonais_batch([ais_msg], name, url, rxtime=rxtime)
+    return build_jsonais_batch([ais_msg], name, rxtime=rxtime)
 
 
 class AISCache:
@@ -150,7 +149,7 @@ if __name__ == '__main__':
         if now >= next_send:
           msgs = cache.flush(now)
           if msgs:
-            output = build_jsonais_batch(msgs, NAME, URL)
+            output = build_jsonais_batch(msgs, NAME)
             try:
               post_jsonais(URL, output)
             except requests.exceptions.RequestException as e:

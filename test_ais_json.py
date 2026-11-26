@@ -14,14 +14,14 @@ def test_parsed_to_jsonais_position_report():
         'nav_status': 0,
     }
 
-    output = parsed_to_jsonais(parsed, 'TestStation', 'http://example.com/post', rxtime='20260223120000')
+    output = parsed_to_jsonais(parsed, 'TestStation', rxtime='20260223120000')
 
     assert output['protocol'] == 'jsonais'
     assert output['encodetime'] == '20260223120000'
     assert len(output['groups']) == 1
 
     group = output['groups'][0]
-    assert group['path'] == [{'name': 'TestStation', 'url': 'http://example.com/post'}]
+    assert group['path'] == [{'name': 'TestStation'}]
 
     msg = group['msgs'][0]
     assert msg['msgtype'] == 1
@@ -38,7 +38,7 @@ def test_parsed_to_jsonais_position_report():
 def test_parsed_to_jsonais_minimal():
     parsed = {'id': 5, 'mmsi': 123456789}
 
-    output = parsed_to_jsonais(parsed, 'Sta', 'http://x.com', rxtime='20260101000000')
+    output = parsed_to_jsonais(parsed, 'Sta', rxtime='20260101000000')
 
     msg = output['groups'][0]['msgs'][0]
     assert msg['msgtype'] == 5
@@ -60,7 +60,7 @@ def test_parsed_to_jsonais_static_fields():
         'destination': 'HELSINKI',
     }
 
-    output = parsed_to_jsonais(parsed, 'Sta', 'http://x.com', rxtime='20260101000000')
+    output = parsed_to_jsonais(parsed, 'Sta', rxtime='20260101000000')
     msg = output['groups'][0]['msgs'][0]
 
     assert msg['callsign'] == 'ABCD'
@@ -117,12 +117,12 @@ def test_build_jsonais_batch():
         {'msgtype': 5, 'mmsi': 222, 'rxtime': '20260101000000'},
     ]
 
-    output = build_jsonais_batch(msgs, 'TestStation', 'http://example.com/post', rxtime='20260101000000')
+    output = build_jsonais_batch(msgs, 'TestStation', rxtime='20260101000000')
 
     assert output['protocol'] == 'jsonais'
     assert output['encodetime'] == '20260101000000'
     group = output['groups'][0]
-    assert group['path'] == [{'name': 'TestStation', 'url': 'http://example.com/post'}]
+    assert group['path'] == [{'name': 'TestStation'}]
     assert group['msgs'] == msgs
     assert len(group['msgs']) == 2
 
