@@ -125,7 +125,7 @@ class AISCache:
 def post_jsonais(url, output):
     """POST a jsonais output dict to the given URL. Returns the response."""
     post = json.dumps(output)
-    r = requests.post(url, files={'jsonais': (None, post)})
+    r = requests.post(url, files={'jsonais': (None, post)}, timeout=30)
     return r
 
 
