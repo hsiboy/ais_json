@@ -175,3 +175,23 @@ def test_cache_position_dedup_expired():
     cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0})
     msgs = cache.flush(now=1200.0)
     assert len(msgs) == 1
+
+
+def test_cache_ignores_ignored_types():
+    cache = AISCache()
+
+    for msgtype in [7, 10, 11, 12, 13, 15, 16, 20, 22, 23]:
+        cache.add({'mmsi': 111, 'msgtype': msgtype})
+
+    msgs = cache.flush(now=1000.0)
+    assert len(msgs) == 0
+
+
+def test_cache_accepts_non_ignored_types():
+    cache = AISCache()
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0})
+    cache.add({'mmsi': 222, 'msgtype': 5})
+
+    msgs = cache.flush(now=1000.0)
+    assert len(msgs) == 2

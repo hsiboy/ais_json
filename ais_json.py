@@ -9,6 +9,8 @@ import random
 import requests
 
 POSITION_TYPES = {1, 2, 3, 18}
+# aprs.fi ignores these message types, they do not have position information
+IGNORED_TYPES = {7, 10, 11, 12, 13, 15, 16, 20, 22, 23}
 POSITION_DEDUP_INTERVAL = 120  # seconds
 
 
@@ -97,6 +99,8 @@ class AISCache:
         self.dedup_interval = dedup_interval
 
     def add(self, ais_msg):
+        if ais_msg['msgtype'] in IGNORED_TYPES:
+            return
         key = (ais_msg['mmsi'], ais_msg['msgtype'])
         self.cache[key] = ais_msg
 
