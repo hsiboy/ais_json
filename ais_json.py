@@ -95,7 +95,7 @@ def parsed_to_jsonais(parsed, name, rxtime=None):
 class AISCache:
     def __init__(self, dedup_interval=POSITION_DEDUP_INTERVAL):
         self.cache = {}              # (mmsi, msgtype, partno) -> ais_msg
-        self.last_sent_pos = {}      # mmsi -> (lon, lat, monotonic_time)
+        self.last_sent_pos = {}      # mmsi -> (lon, lat, status, monotonic_time)
         self.dedup_interval = dedup_interval
 
     def add(self, ais_msg):
@@ -114,11 +114,15 @@ class AISCache:
             if msgtype in POSITION_TYPES:
                 lon = round(msg.get('lon', 0), 6)
                 lat = round(msg.get('lat', 0), 6)
+                # A changed navigation status is worth sending even if the
+                # position has not changed. Heading, course and speed are
+                # not compared, since they drift even on a moored vessel.
+                status = msg.get('status')
                 last = self.last_sent_pos.get(mmsi)
-                if last and last[0] == lon and last[1] == lat \
-                        and (now - last[2]) < self.dedup_interval:
+                if last and last[:3] == (lon, lat, status) \
+                        and (now - last[3]) < self.dedup_interval:
                     continue
-                self.last_sent_pos[mmsi] = (lon, lat, now)
+                self.last_sent_pos[mmsi] = (lon, lat, status, now)
             msgs.append(msg)
         self.cache.clear()
         return msgs

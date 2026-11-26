@@ -236,3 +236,30 @@ def test_cache_keeps_both_type24_parts():
     by_part = {m['partno']: m for m in msgs}
     assert by_part[0]['shipname'] == 'NEWNAME'
     assert by_part[1]['callsign'] == 'ABCD'
+
+
+def test_cache_position_dedup_changed_status():
+    """A changed nav status passes through even if the position is the same."""
+    cache = AISCache()
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0, 'status': 0})
+    cache.flush(now=1000.0)
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0, 'status': 5})
+    msgs = cache.flush(now=1050.0)
+    assert len(msgs) == 1
+    assert msgs[0]['status'] == 5
+
+
+def test_cache_position_dedup_ignores_heading():
+    """Heading, course and speed drift on moored vessels; do not resend for them."""
+    cache = AISCache()
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0, 'status': 5, 'heading': 10})
+    cache.flush(now=1000.0)
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0, 'lat': 2.0, 'status': 5, 'heading': 12,
+               'course': 33.0, 'speed': 0.1})
+    msgs = cache.flush(now=1050.0)
+    assert len(msgs) == 0
+
