@@ -195,3 +195,29 @@ def test_cache_accepts_non_ignored_types():
 
     msgs = cache.flush(now=1000.0)
     assert len(msgs) == 2
+
+
+def test_positions_rounded_to_6_decimals():
+    parsed = {
+        'id': 1,
+        'mmsi': 211234567,
+        'x': 24.93840001,
+        'y': 60.16990009,
+    }
+
+    msg = parsed_to_ais_msg(parsed, rxtime='20260101000000')
+    assert msg['lon'] == 24.93840
+    assert msg['lat'] == 60.16990
+
+
+def test_cache_position_dedup_with_rounding():
+    """Positions differing only beyond 6 decimals should be deduplicated."""
+    cache = AISCache()
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.000000, 'lat': 2.000000})
+    msgs1 = cache.flush(now=1000.0)
+    assert len(msgs1) == 1
+
+    cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0000001, 'lat': 2.0000001})
+    msgs2 = cache.flush(now=1050.0)
+    assert len(msgs2) == 0

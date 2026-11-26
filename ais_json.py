@@ -26,9 +26,9 @@ def parsed_to_ais_msg(parsed, rxtime=None):
             }
 
     if 'x' in parsed:
-      ais_msg['lon'] = parsed['x']
+      ais_msg['lon'] = round(parsed['x'], 6)
     if 'y' in parsed:
-      ais_msg['lat'] = parsed['y']
+      ais_msg['lat'] = round(parsed['y'], 6)
     if 'sog' in parsed:
       ais_msg['speed'] = parsed['sog']
     if 'cog' in parsed:
@@ -110,12 +110,13 @@ class AISCache:
         msgs = []
         for (mmsi, msgtype), msg in self.cache.items():
             if msgtype in POSITION_TYPES:
-                pos = (msg.get('lon'), msg.get('lat'))
+                lon = round(msg.get('lon', 0), 6)
+                lat = round(msg.get('lat', 0), 6)
                 last = self.last_sent_pos.get(mmsi)
-                if last and last[0] == pos[0] and last[1] == pos[1] \
+                if last and last[0] == lon and last[1] == lat \
                         and (now - last[2]) < self.dedup_interval:
                     continue
-                self.last_sent_pos[mmsi] = (pos[0], pos[1], now)
+                self.last_sent_pos[mmsi] = (lon, lat, now)
             msgs.append(msg)
         self.cache.clear()
         return msgs
