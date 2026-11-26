@@ -221,3 +221,18 @@ def test_cache_position_dedup_with_rounding():
     cache.add({'mmsi': 111, 'msgtype': 1, 'lon': 1.0000001, 'lat': 2.0000001})
     msgs2 = cache.flush(now=1050.0)
     assert len(msgs2) == 0
+
+
+def test_cache_keeps_both_type24_parts():
+    """Type 24 part A and part B must not overwrite each other."""
+    cache = AISCache()
+    cache.add({'mmsi': 111, 'msgtype': 24, 'partno': 0, 'shipname': 'TESTSHIP'})
+    cache.add({'mmsi': 111, 'msgtype': 24, 'partno': 1, 'callsign': 'ABCD'})
+    cache.add({'mmsi': 111, 'msgtype': 24, 'partno': 0, 'shipname': 'NEWNAME'})
+
+    msgs = cache.flush(now=1000.0)
+
+    assert len(msgs) == 2
+    by_part = {m['partno']: m for m in msgs}
+    assert by_part[0]['shipname'] == 'NEWNAME'
+    assert by_part[1]['callsign'] == 'ABCD'

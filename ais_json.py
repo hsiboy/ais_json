@@ -94,21 +94,23 @@ def parsed_to_jsonais(parsed, name, rxtime=None):
 
 class AISCache:
     def __init__(self, dedup_interval=POSITION_DEDUP_INTERVAL):
-        self.cache = {}              # (mmsi, msgtype) -> ais_msg
+        self.cache = {}              # (mmsi, msgtype, partno) -> ais_msg
         self.last_sent_pos = {}      # mmsi -> (lon, lat, monotonic_time)
         self.dedup_interval = dedup_interval
 
     def add(self, ais_msg):
         if ais_msg['msgtype'] in IGNORED_TYPES:
             return
-        key = (ais_msg['mmsi'], ais_msg['msgtype'])
+        # Type 24 part A (name) and part B (callsign, dimensions) carry
+        # different fields, so keep the latest of each part separately.
+        key = (ais_msg['mmsi'], ais_msg['msgtype'], ais_msg.get('partno'))
         self.cache[key] = ais_msg
 
     def flush(self, now=None):
         if now is None:
             now = time.monotonic()
         msgs = []
-        for (mmsi, msgtype), msg in self.cache.items():
+        for (mmsi, msgtype, _partno), msg in self.cache.items():
             if msgtype in POSITION_TYPES:
                 lon = round(msg.get('lon', 0), 6)
                 lat = round(msg.get('lat', 0), 6)
