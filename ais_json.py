@@ -14,11 +14,9 @@ IP = '127.0.0.1'
 PORT = 5000
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
+sock.bind((IP, PORT))
 
 while True:
-
-  sock.bind((IP, PORT))
 
   for msg in ais.stream.decode(sock.makefile('r'),keep_nmea=True):
     rxtime =  datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S") #YYYYMMDDHHMMSS
@@ -98,5 +96,3 @@ while True:
        print(colored('Result:', 'green'), json.loads(r.text)['description'])
     except requests.exceptions.RequestException as e:
       print (e)
-  
-  sock.close()
