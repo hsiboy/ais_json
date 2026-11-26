@@ -6,12 +6,15 @@ import json
 import datetime
 import time
 import random
+import socket
 import requests
 
 POSITION_TYPES = {1, 2, 3, 18}
 # aprs.fi ignores these message types, they do not have position information
 IGNORED_TYPES = {7, 10, 11, 12, 13, 15, 16, 20, 22, 23}
 POSITION_DEDUP_INTERVAL = 120  # seconds
+SEND_INTERVAL = 28  # seconds, plus 0-4 seconds of random jitter
+IDLE_TIMEOUT = 1.0  # seconds to wait for a UDP packet before checking timers
 
 
 def parsed_to_ais_msg(parsed, rxtime=None):
@@ -135,10 +138,55 @@ def post_jsonais(url, output):
     return r
 
 
+def next_send_time(now):
+    return now + SEND_INTERVAL + random.uniform(0, 4)
+
+
+class BatchSender:
+    """Posts the cached messages to the server when the send interval has passed."""
+
+    def __init__(self, cache, name, url, now):
+        self.cache = cache
+        self.name = name
+        self.url = url
+        self.next_send = next_send_time(now)
+
+    def tick(self, now):
+        if now < self.next_send:
+            return
+        self.next_send = next_send_time(now)
+        msgs = self.cache.flush(now)
+        if not msgs:
+            return
+        output = build_jsonais_batch(msgs, self.name)
+        try:
+            post_jsonais(self.url, output)
+        except requests.exceptions.RequestException as e:
+            print(e)
+
+
+def udp_lines(sock, tick, timeout=IDLE_TIMEOUT):
+    """Yield NMEA lines received on a UDP socket.
+
+    Calls tick() after each packet and whenever no packet arrives within
+    the timeout, so that timed work gets done even when the receiver is
+    quiet.
+    """
+    sock.settimeout(timeout)
+    while True:
+        try:
+            data = sock.recv(65535)
+        except socket.timeout:
+            tick()
+            continue
+        for line in data.decode('ascii', errors='replace').splitlines(keepends=True):
+            yield line
+        tick()
+
+
 if __name__ == '__main__':
     from termcolor import colored
     import ais.stream
-    import socket
     from settings import URL, NAME
 
     IP = '127.0.0.1'
@@ -148,21 +196,11 @@ if __name__ == '__main__':
     sock.bind((IP, PORT))
 
     cache = AISCache()
-    next_send = time.monotonic() + 28 + random.uniform(0, 4)
+    sender = BatchSender(cache, NAME, URL, time.monotonic())
 
-    while True:
-      for msg in ais.stream.decode(sock.makefile('r'), keep_nmea=True):
+    def tick():
+        sender.tick(time.monotonic())
+
+    for msg in ais.stream.decode(udp_lines(sock, tick), keep_nmea=True):
         parsed = json.loads(json.dumps(msg))
-        ais_msg = parsed_to_ais_msg(parsed)
-        cache.add(ais_msg)
-
-        now = time.monotonic()
-        if now >= next_send:
-          msgs = cache.flush(now)
-          if msgs:
-            output = build_jsonais_batch(msgs, NAME)
-            try:
-              post_jsonais(URL, output)
-            except requests.exceptions.RequestException as e:
-              print(e)
-          next_send = now + 28 + random.uniform(0, 4)
+        cache.add(parsed_to_ais_msg(parsed))

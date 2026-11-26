@@ -1,5 +1,6 @@
 from unittest.mock import patch, MagicMock
-from ais_json import parsed_to_jsonais, parsed_to_ais_msg, build_jsonais_batch, post_jsonais, AISCache
+from ais_json import parsed_to_jsonais, parsed_to_ais_msg, build_jsonais_batch, post_jsonais, AISCache, BatchSender, udp_lines
+import socket
 
 
 def test_parsed_to_jsonais_position_report():
@@ -263,3 +264,58 @@ def test_cache_position_dedup_ignores_heading():
     msgs = cache.flush(now=1050.0)
     assert len(msgs) == 0
 
+
+@patch('ais_json.post_jsonais')
+def test_batch_sender_waits_for_interval(mock_post):
+    cache = AISCache()
+    sender = BatchSender(cache, 'Sta', 'http://example.com/post', now=1000.0)
+    cache.add({'mmsi': 111, 'msgtype': 5})
+
+    sender.tick(now=1010.0)
+    mock_post.assert_not_called()
+
+    sender.tick(now=1033.0)
+    mock_post.assert_called_once()
+    output = mock_post.call_args[0][1]
+    assert output['groups'][0]['msgs'] == [{'mmsi': 111, 'msgtype': 5}]
+
+    # Next send is scheduled 28-32 seconds later
+    cache.add({'mmsi': 222, 'msgtype': 5})
+    sender.tick(now=1060.0)
+    assert mock_post.call_count == 1
+    sender.tick(now=1066.0)
+    assert mock_post.call_count == 2
+
+
+@patch('ais_json.post_jsonais')
+def test_batch_sender_skips_empty_batch(mock_post):
+    sender = BatchSender(AISCache(), 'Sta', 'http://example.com/post', now=1000.0)
+    sender.tick(now=1100.0)
+    mock_post.assert_not_called()
+
+
+def test_udp_lines_ticks_when_idle():
+    """tick() runs on timeout without traffic, and after each packet."""
+    rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        rx.bind(('127.0.0.1', 0))
+        ticks = []
+
+        def tick_after_timeouts():
+            # Send a packet only after the receiver has idled a couple of times
+            if len(ticks) == 2:
+                tx.sendto(b'!AIVDM,a\r\n!AIVDM,b\r\n', rx.getsockname())
+
+        lines = udp_lines(rx, lambda: (ticks.append(1), tick_after_timeouts()), timeout=0.05)
+        assert next(lines) == '!AIVDM,a\r\n'
+        assert len(ticks) == 2
+        assert next(lines) == '!AIVDM,b\r\n'
+
+        # Generator resumes after the packet: tick, then idle timeouts
+        tx.sendto(b'!AIVDM,c\n', rx.getsockname())
+        assert next(lines) == '!AIVDM,c\n'
+        assert len(ticks) == 3
+    finally:
+        rx.close()
+        tx.close()
